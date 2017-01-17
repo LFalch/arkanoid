@@ -2,47 +2,26 @@
 extern crate korome;
 extern crate collider;
 
-use korome::{Graphics, Texture, run_until_closed, FrameInfo, Drawer};
-use collider::{Collider, Event, Hitbox, HitboxId};
-use collider::geom::{PlacedShape, Shape, Vec2, vec2};
-
-struct Object {
-    id: HitboxId,
-    tex: Texture
-}
-
-impl Object {
-    fn new(g: &Graphics, tex: &str, id: HitboxId) -> Self{
-        Object {
-            id: id,
-            tex: Texture::from_file(&g, tex).unwrap()
-        }
-    }
-    fn draw(&self, c: &Collider, d: &mut Drawer) {
-        let Vec2{x, y} = c.get_hitbox(self.id).shape.pos;
-        self.tex.drawer()
-            .pos((x as f32, y as f32))
-            .draw(d)
-    }
-}
+use korome::{Graphics, run_until_closed, FrameInfo, Drawer};
+use collider::{Collider, Event};
+use collider::geom::{Shape, vec2};
 
 const BALL_SPEED: f64 = 150.;
 const PADDLE_SPEED: f64 = 400.;
 
-fn hitbox(x: f64, y: f64, shape: Shape) -> Hitbox {
-    Hitbox::new(PlacedShape::new(vec2(x, y), shape))
-}
+mod obj;
+use obj::*;
 
 fn main() {
     let g = Graphics::new("Arkanoid", 800, 600).unwrap();
 
     let mut collider = Collider::new(50., 0.01);
-    collider.add_hitbox(0, hitbox(0., -200., Shape::new_rect(vec2(100., 49.))));
+    collider.add_hitbox_with_interactivity(0, hitbox(0., -200., Shape::new_rect(vec2(100., 49.))), ObjectType::Paddle);
     let paddle = Object::new(&g, "textures/paddle_gun.png", 0);
 
     let mut ball = hitbox(0., 0., Shape::new_circle(16.));
     ball.vel.pos = vec2(BALL_SPEED, -BALL_SPEED);
-    collider.add_hitbox(1, ball);
+    collider.add_hitbox_with_interactivity(1, ball, ObjectType::Ball);
     let ball = Object::new(&g, "textures/red.png", 1);
 
     let mut time = 0.;
@@ -58,8 +37,10 @@ fn main() {
             collider.set_time(next_time);
             while let Some((e, _id1, _id2)) = collider.next() {
                 if let Event::Collide = e {
+                    let paddle = collider.get_hitbox(0);
                     let mut ball = collider.get_hitbox(1);
                     ball.vel.pos.y *= -1.;
+                    ball.vel.pos += paddle.vel.pos;
                     collider.update_hitbox(1, ball);
                 }
             }
