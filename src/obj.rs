@@ -1,4 +1,4 @@
-use korome::{Graphics, Texture, Drawer};
+use korome::{Graphics, Texture, Drawer, FrameInfo};
 use collider::{Collider, Hitbox, HitboxId, Event};
 use collider::geom::{PlacedShape, Shape, Vec2, vec2};
 use collider::inter::{Interactivity, Group};
@@ -13,8 +13,8 @@ pub struct ObjSys {
 }
 
 texturebase!{TextureBase;
-    paddle "paddle_gun",
-    ball "red",
+    paddle "paddle",
+    ball "newred",
 }
 
 impl ObjSys {
@@ -26,11 +26,15 @@ impl ObjSys {
             tb: TextureBase::new(g)
         }
     }
-    pub fn add_hb(&mut self, id: HitboxId, hb: Hitbox) -> HitboxId {
-        self.collider.add_hitbox_with_interactivity(id, hb, ObjectType::from_id(id));
-        id
+    fn free_id_by_type(&self, ty: ObjectType) -> HitboxId {
+        (ty as u32 as HitboxId..).filter(|i| !self.objs.contains(i)).next().unwrap()
     }
-    pub fn draw(&self, id: HitboxId, d: &mut Drawer) {
+    pub fn add_hb(&mut self, group: ObjectType, hb: Hitbox) {
+        let id = self.free_id_by_type(group);
+        self.collider.add_hitbox_with_interactivity(id, hb, ObjectType::from_id(id));
+        self.objs.insert(id);
+    }
+    fn draw(&self, id: HitboxId, d: &mut Drawer) {
         let Vec2{x, y} = self.get(id).shape.pos;
         match ObjectType::from_id(id) {
             Paddle => &self.tb.paddle,
@@ -40,20 +44,46 @@ impl ObjSys {
          .pos((x as f32, y as f32))
          .draw(d)
     }
-    pub fn add_time(&mut self, delta: f64) -> Vec<(Event, HitboxId, HitboxId)> {
+    pub fn draw_all(&self, d: &mut Drawer) {
+        for &id in self.objs.iter() {
+            self.draw(id, d);
+        }
+    }
+    pub fn update_all(&mut self, info: &FrameInfo, wh: (f64, f64)) {
+        let mut dead_balls = Vec::new();
+        for &id in &self.objs {
+            let ty = ObjectType::from_id(id);
+            let mut hb = self.get(id);
+            match ty {
+                Paddle => {
+                    super::update_player(&mut hb, info, wh);
+                }
+                Ball => {
+                    if !super::update_ball(&mut hb, info, wh) {
+                        dead_balls.push(id);
+                    }
+                }
+                _ => unimplemented!()
+            }
+            self.collider.update_hitbox(id, hb);
+        }
+        for id in dead_balls {
+            self.objs.remove(&id);
+            self.collider.remove_hitbox(id);
+        }
+    }
+    pub fn add_time<F: FnMut(&mut Self, Event, HitboxId, HitboxId)>(&mut self, delta: f64, mut f: F) {
         self.time += delta;
 
         let mut next_time = self.collider.next_time();
-        let mut events = Vec::new();
         while self.time >= next_time {
             self.collider.set_time(next_time);
-            while let Some(event) = self.collider.next() {
-                events.push(event);
+            while let Some((e, id1, id2)) = self.collider.next() {
+                f(self, e, id1, id2);
             }
             next_time = self.collider.next_time();
         }
         self.collider.set_time(self.time);
-        events
     }
     #[inline]
     pub fn get(&self, id: HitboxId) -> Hitbox {
@@ -62,6 +92,9 @@ impl ObjSys {
     #[inline]
     pub fn update(&mut self, id: HitboxId, new: Hitbox) {
         self.collider.update_hitbox(id, new)
+    }
+    pub fn count_balls(&self) -> usize {
+        self.objs.iter().filter(|&&i| ObjectType::from_id(i) == Ball).count()
     }
 }
 
@@ -73,14 +106,12 @@ pub fn hitbox(x: f64, y: f64, shape: Shape) -> Hitbox {
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum ObjectType {
     Paddle = 0,
-    Bottom = 1,
-    Ball = 2,
+    Ball = 1,
     Brick = 1000,
 }
 use self::ObjectType::*;
 
 pub const PADDLE: u32 = Paddle as u32;
-pub const BOTTOM: u32 = Bottom as u32;
 pub const BALL: u32 = Ball as u32;
 pub const BRICK: u32 = Brick as u32;
 
@@ -92,14 +123,25 @@ impl ObjectType {
             Ball
         } else if id >= BRICK as HitboxId {
             Brick
-        } else if id >= BOTTOM as HitboxId {
-            Bottom
         } else {
             Paddle
         }
     }
+    pub fn is_paddle(&self) -> bool {
+        if let Paddle = *self {
+            true
+        } else {
+            false
+        }
+    }
+    pub fn is_ball(&self) -> bool {
+        if let Ball = *self {
+            true
+        } else {
+            false
+        }
+    }
 }
-
 
 impl Interactivity for ObjectType {
     fn can_interact(&self, other: &Self) -> bool {
@@ -109,7 +151,7 @@ impl Interactivity for ObjectType {
         Some(*self as u32)
     }
     fn interact_groups(&self) -> &'static [Group] {
-        const BALL_GRP: &'static [Group] = &[PADDLE, BOTTOM, BRICK, BALL];
+        const BALL_GRP: &'static [Group] = &[PADDLE, BRICK, BALL];
         const NORMAL_GRP: &'static [Group] = &[BALL];
 
         match *self {
